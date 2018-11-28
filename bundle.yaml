@@ -1,0 +1,237 @@
+series: xenial
+variables:
+  landscape-charm: &landscape-charm "cs:~alai/landscape-server"
+machines:
+  0:
+    constraints: cores=4 mem=8G root-disk=40G
+  1:
+    constraints: cores=4 mem=8G root-disk=40G
+  2:
+    constraints: cores=4 mem=8G root-disk=40G
+  3:
+    constraints: cores=2 mem=4G root-disk=40G
+  4:
+    constraints: cores=2 mem=4G root-disk=40G
+  5:
+    constraints: cores=1 mem=2G root-disk=40G
+  6:
+    constraints: cores=8 mem=16G root-disk=40G
+  7:
+    constraints: cores=8 mem=16G root-disk=40G
+  8:
+    constraints: cores=8 mem=8G root-disk=40G
+  100:
+    constraints: cores=4 mem=8G root-disk=40G
+  101:
+    constraints: cores=1 mem=2G root-disk=40G
+  102:
+    constraints: cores=1 mem=2G root-disk=40G
+  106:
+    constraints: cores=4 mem=8G root-disk=40G
+services:
+  easyrsa:
+    annotations:
+      gui-x: '450'
+      gui-y: '550'
+    charm: cs:~containers/easyrsa
+    num_units: 1
+    to:
+      - 'kubernetes-master'
+  etcd:
+    annotations:
+      gui-x: '800'
+      gui-y: '550'
+    charm: cs:~containers/etcd
+    num_units: 3
+    to:
+      - '0'
+      - '1'
+      - '2'
+  flannel:
+    annotations:
+      gui-x: '450'
+      gui-y: '750'
+    charm: cs:~containers/flannel
+    options:
+      cidr: '192.168.0.0/16'
+  kubeapi-load-balancer:
+    annotations:
+      gui-x: '450'
+      gui-y: '250'
+    charm: cs:~containers/kubeapi-load-balancer
+    expose: true
+    num_units: 1
+    to:
+      - '5'
+  kubernetes-master:
+    annotations:
+      gui-x: '800'
+      gui-y: '850'
+    charm: cs:~containers/kubernetes-master
+    num_units: 2
+    to:
+      - '3'
+      - '4'
+    options:
+      channel: 1.10/stable
+      service-cidr: '192.168.0.0/16'
+  kubernetes-worker:
+    annotations:
+      gui-x: '100'
+      gui-y: '850'
+    charm: cs:~containers/kubernetes-worker
+    constraints: cores=8 mem=16G root-disk=40G
+    expose: true
+    num_units: 2
+    options:
+      channel: 1.10/stable
+    to:
+      - '6'
+      - '7'
+  aws-integrator:
+    charm: cs:~containers/aws-integrator
+    num_units: 1
+    to:
+    - kubernetes-master/0
+  ### Monitoring ###
+  grafana:
+    charm: cs:xenial/grafana
+    num_units: 1
+    expose: true
+    to:
+      - 100
+  prometheus:
+    charm: cs:xenial/prometheus2
+    num_units: 1
+    to:
+      - 101
+  telegraf:
+    charm: cs:xenial/telegraf
+  apache2:
+    charm: cs:xenial/apache2
+    num_units: 1
+    expose: true
+    options:
+      enable_modules: "headers proxy_html proxy_http"
+    to:
+      - '8'
+  elasticsearch:
+    charm: cs:xenial/elasticsearch
+    num_units: 1
+    to:
+      - 102
+#  graylog:
+#    charm: cs:xenial/graylog
+#    num_units: 1
+#    to:
+#      - 103
+#  mongodb:
+#    charm: cs:xenial/mongodb
+#    num_units: 1
+#    to:
+#      - lxd:103
+  landscape-haproxy:
+    charm: cs:xenial/haproxy
+    series: xenial
+    options:
+      default_timeouts: "queue 60000, connect 5000, client 120000, server 120000"
+      services: ""
+      source: backports
+      ssl_cert: SELFSIGNED
+      global_default_bind_options: "no-tlsv10"
+    num_units: 1
+    to:
+    - 106
+  landscape-postgresql:
+    charm: cs:xenial/postgresql
+    series: xenial
+    options:
+      extra_packages: python-apt postgresql-contrib postgresql-.*-debversion postgresql-plpython-.*
+      max_connections: 500
+      max_prepared_transactions: 500
+    num_units: 1
+    to:
+    - lxd:106
+  landscape-server:
+    charm: *landscape-charm
+    series: xenial
+    options:
+      source: ppa:landscape/18.03
+      key: 4652B4E6
+    num_units: 1
+    to:
+    - lxd:106
+  landscape-rabbitmq-server:
+    charm: cs:xenial/rabbitmq-server
+    series: xenial
+    num_units: 2
+    options:
+      min-cluster-size: 2
+    to:
+    - lxd:106
+    - lxd:106
+  landscape-client:
+    charm: cs:xenial/landscape-client
+    series: xenial
+    options:
+      account-name: "standalone"
+      ping-url: http://127.0.0.1/ping
+      url: https://127.0.0.1/message-system
+      http-proxy: ""
+      https-proxy: ""
+      origin: ppa:landscape/18.03
+      script-users: "ALL"
+      include-manager-plugins: "ScriptExecution"
+relations:
+- - kubernetes-master:kube-api-endpoint
+  - kubeapi-load-balancer:apiserver
+- - kubernetes-master:loadbalancer
+  - kubeapi-load-balancer:loadbalancer
+- - kubernetes-master:kube-control
+  - kubernetes-worker:kube-control
+- - kubernetes-master:certificates
+  - easyrsa:client
+- - etcd:certificates
+  - easyrsa:client
+- - kubernetes-master:etcd
+  - etcd:db
+- - kubernetes-worker:certificates
+  - easyrsa:client
+- - kubernetes-worker:kube-api-endpoint
+  - kubeapi-load-balancer:website
+- - kubeapi-load-balancer:certificates
+  - easyrsa:client
+- - flannel:etcd
+  - etcd:db
+- - flannel:cni
+  - kubernetes-master:cni
+- - flannel:cni
+  - kubernetes-worker:cni
+- - prometheus:grafana-source
+  - grafana:grafana-source
+- - telegraf:prometheus-client
+  - prometheus:target
+- - kubernetes-master:juju-info
+  - telegraf:juju-info
+- - kubernetes-worker:juju-info
+  - telegraf:juju-info
+#- - apache2:reverseproxy
+#  - graylog:website
+#- - graylog:elasticsearch
+#  - elasticsearch:client
+#- - graylog:mongodb
+#  - mongodb:database
+#- - filebeat:logstash
+#  - graylog:beats
+- [ kubernetes-worker, landscape-client ]
+- [ kubernetes-master, landscape-client ]
+- [ landscape-server, landscape-client ]
+- [ "landscape-server:juju-info", "telegraf:juju-info" ]
+- [ "landscape-postgresql:juju-info", "telegraf:juju-info" ]
+- [ landscape-postgresql, landscape-client ]
+- [ "landscape-server:db", "landscape-postgresql:db-admin" ]
+- [ landscape-server, landscape-rabbitmq-server ]
+- [ landscape-rabbitmq-server, landscape-client ]
+- [ landscape-server, landscape-haproxy ]
+- ['aws-integrator', 'kubernetes-master']
+- ['aws-integrator', 'kubernetes-worker']
